@@ -5,6 +5,7 @@ import calendar
 import random
 
 import frappe
+from frappe.tests.utils import FrappeTestCase
 from frappe.core.doctype.user_permission.test_user_permission import create_user
 from frappe.model.document import Document
 from frappe.tests import IntegrationTestCase, change_settings
@@ -927,7 +928,70 @@ class TestSalarySlip(IntegrationTestCase):
 				self.assertEqual(ss.end_date, add_days(nowdate(), 6))
 			elif payroll_frequency == "Daily":
 				self.assertEqual(ss.end_date, nowdate())
+	class TestEmployeeAdvanceReturnAmount(FrappeTestCase):
 
+    def setUp(self):
+        # Create a test employee if not already present
+        if not frappe.db.exists("Employee", {"employee_name": "Test Advance Employee"}):
+            self.employee = frappe.get_doc({
+                "doctype": "Employee",
+                "employee_name": "Test Advance Employee",
+                "company": "_Test Company",
+                "date_of_birth": "1990-01-01",
+                "date_of_joining": "2020-01-01",
+                "status": "Active"
+            }).insert()
+        else:
+            self.employee = frappe.get_doc("Employee", {"employee_name": "Test Advance Employee"})
+
+        # Create Employee Advance
+        self.advance = frappe.get_doc({
+            "doctype": "Employee Advance",
+            "employee": self.employee.name,
+            "posting_date": frappe.utils.today(),
+            "advance_amount": 20000,
+            "repay_unclaimed_amount_from_salary": 1
+        }).insert()
+
+        # Create Salary Component for Employee Advance if not exists
+        if not frappe.db.exists("Salary Component", "Employee Advance"):
+            frappe.get_doc({
+                "doctype": "Salary Component",
+                "salary_component": "Employee Advance",
+                "type": "Deduction"
+            }).insert()
+
+    def test_employee_advance_updates_return_amount(self):
+        # Before: return_amount = 0
+        self.assertEqual(self.advance.return_amount, 0)
+
+        # Create Salary Slip with Employee Advance deduction
+        salary_slip = frappe.get_doc({
+            "doctype": "Salary Slip",
+            "employee": self.employee.name,
+            "start_date": "2025-09-01",
+            "end_date": "2025-09-30",
+            "payroll_frequency": "Monthly",
+            "posting_date": frappe.utils.today(),
+            "deductions": [
+                {
+                    "salary_component": "Employee Advance",
+                    "amount": 5000,
+                    "reference_name": self.advance.name
+                }
+            ]
+        })
+        salary_slip.insert()
+        salary_slip.submit()
+
+        # Reload advance and check return_amount updated
+        self.advance.reload()
+        self.assertEqual(self.advance.return_amount, 5000)
+
+        # Cancel Salary Slip and check rollback
+        salary_slip.cancel()
+        self.advance.reload()
+        self.assertEqual(self.advance.return_amount, 0)
 	def test_multi_currency_salary_slip(self):
 		from hrms.payroll.doctype.salary_structure.test_salary_structure import make_salary_structure
 
